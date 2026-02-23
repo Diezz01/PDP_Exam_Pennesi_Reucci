@@ -4,7 +4,9 @@
 *.ptx
 *.cubin
 *.fatbin
-
+*.txt
+*.exe
+*.bin
 
 #dataset
 dataset_original.*
