@@ -7,6 +7,7 @@
 *.txt
 *.exe
 *.bin
+*.obj
 
 #dataset
 dataset_original.*
