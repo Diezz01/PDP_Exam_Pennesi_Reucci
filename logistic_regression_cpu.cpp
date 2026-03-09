@@ -6,14 +6,16 @@
 
 using namespace std;
 
-#define EPOCHS 500
-#define LR 0.05f
+#define EPOCHS 500 //number of training epochs
+#define LR 0.05f //learning rate
 
+//binary file structure
 struct Header {
     uint32_t n_samples;
     uint32_t n_features;
 };
 
+//sigmoid activation function
 float sigmoid(float z){
     return 1.0f / (1.0f + exp(-z));
 }
@@ -21,7 +23,7 @@ float sigmoid(float z){
 int main(){
 
     Header h;
-
+    //fetching dataset from binary file
     ifstream dataset_bin("dataset_normalized.bin", ios::binary);
     if(!dataset_bin){
         cout << "Error opening dataset\n";
@@ -30,14 +32,15 @@ int main(){
 
     dataset_bin.read((char*)&h, sizeof(h));
 
-    int N = h.n_samples;
-    int F = h.n_features;
+    int N = h.n_samples;//fetching number of samples
+    int F = h.n_features;//fetching number of features
 
     vector<float> mean(F);
     vector<float> stddev(F);
     vector<float> X(N * F);
     vector<float> y(N);
 
+    //fetching data from binary file to populate structures
     dataset_bin.read((char*)mean.data(), F*sizeof(float));
     dataset_bin.read((char*)stddev.data(), F*sizeof(float));
     dataset_bin.read((char*)X.data(), N*F*sizeof(float));
@@ -60,21 +63,21 @@ int main(){
         for(int i = 0; i < N; i++){
 
             float z = b;
-
+            //computing linear combination of features and weights
             for(int j = 0; j < F; j++)
                 z += X[i*F + j] * w[j];
 
-            float y_pred = sigmoid(z);
+            float y_pred = sigmoid(z); //activation function with sigmoid
 
-            float error = y_pred - y[i];
-
+            float error = y_pred - y[i]; //calculating error between predicted and actual label
+            
             for(int j = 0; j < F; j++)
                 grad_w[j] += error * X[i*F + j];
 
             grad_b += error;
         }
 
-        // update pesi (una volta per epoca)
+        // updating weights and bias using gradient descent
         for(int j = 0; j < F; j++)
             w[j] -= LR * (grad_w[j] / N);
 
@@ -91,14 +94,14 @@ int main(){
     for(int i = 0; i < N; i++){
 
         float z = b;
-
+        //computing linear combination of features and weights
         for(int j = 0; j < F; j++)
             z += X[i*F + j] * w[j];
 
-        float y_hat = sigmoid(z);
+        float y_hat = sigmoid(z); //calculating predicted probability using sigmoid function
 
         int prediction = (y_hat >= 0.5f) ? 1 : 0;
-
+        //checking if prediction matches ground truth
         if(prediction == (int)y[i])
             correct++;
     }

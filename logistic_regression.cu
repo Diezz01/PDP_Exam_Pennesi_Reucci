@@ -3,20 +3,21 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <iostream>
-//TODO: aggiungi CUDA check error per vedere se le cuda call falliscono
 using namespace std;
+
 #define EPOCHS 1000//number of training epochs
 #define LR 0.05f//learning rate
 #define N_EXECUTION 5 //number of execution performed each with different kernel configuration
 
-#define CUDA_CHECK(call){                                                             
-    cudaError_t err = call;                                   
-    if(err != cudaSuccess){                                   
-        fprintf(stderr, "CUDA Error at %s:%d -> %s\n",        
-        __FILE__, __LINE__, cudaGetErrorString(err));         
-        exit(EXIT_FAILURE);                                   
-    }                                                         
-}
+#define CUDA_CHECK(call) do {                              \
+  cudaError_t _err = (call);                               \
+  if (_err != cudaSuccess) {                               \
+    fprintf(stderr, "CUDA error %s:%d: %s\n",              \
+            __FILE__, __LINE__, cudaGetErrorString(_err)); \
+    exit(1);                                               \
+  }                                                        \
+} while(0)
+
 //binary file structure
 struct Header {
     uint32_t n_samples;
@@ -43,8 +44,8 @@ __global__ void logistic_regression_kernel(
     int N,
     int F)
 {
-    int tid = threadIdx.x;
-    int i = blockIdx.x * blockDim.x + tid; 
+    int tid = threadIdx.x; // Thread identifier inside a block
+    int i = blockIdx.x * blockDim.x + tid; // Global thread identifier
 
     if(i < N){
         float z = 0.0f;
@@ -56,7 +57,7 @@ __global__ void logistic_regression_kernel(
         //adding bias
         z += *b;
         //sigmoid function for prediction
-        y_pred = 1.0f / (1.0f + __expf(-z));
+        y_pred = 1.0f / (1.0f + expf(-z));
 
         //error of prediction
         float error = y_pred - y[i];
@@ -83,7 +84,7 @@ void saveToCSV(Performance p[], int n) {
     for(int i = 0; i < 22; i++)
         file << ";weight" << i;
     file << "\n";
-
+    // performances data
     for(int i = 0; i < n; i++) {
 
         file << p[i].numThreads << ";"
@@ -146,20 +147,20 @@ int main(){
     dataset_bin.close();//close 
 
     // GPU memory allocation
-    cudaMalloc(&dX, X_size * sizeof(float));
-    cudaMalloc(&dy, y_size * sizeof(float));
-    cudaMalloc(&dw, F * sizeof(float));
-    cudaMalloc(&db, sizeof(float));
-    cudaMalloc(&d_grad_w, F * sizeof(float));
-    cudaMalloc(&d_grad_b, sizeof(float));
+    CUDA_CHECK(cudaMalloc(&dX, X_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&dy, y_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&dw, F * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&db, sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_grad_w, F * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_grad_b, sizeof(float)));
 
     // data transfer from Host to GPU
-    cudaMemcpy(dw, w.data(), F * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dX, X.data(), X_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dy, y.data(), y_size * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(dw, w.data(), F * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(dX, X.data(), X_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(dy, y.data(), y_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
 
-    // count how many samples belong to each class
+    // counting how many samples belong to each class
     int count0 = 0, count1 = 0;
     for(int i = 0; i < N; i++){
         if((int)y[i] == 0) count0++;
@@ -168,9 +169,9 @@ int main(){
     printf("Class 0: %d\n", count0);
     printf("Class 1: %d\n", count1);
 
-    // create CUDA events used to measure execution time
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // creating CUDA events used to measure execution time
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
 
     cout << "Training started...\n";
     // testing multiple kernel configuration (threads / block)
@@ -178,49 +179,49 @@ int main(){
         int threads = thread_configs[t];//number of threads per block
         int blocks = (N + threads - 1) / threads;  // compute number of blocks needed
 
-        cudaEventRecord(start);//start GPU timer
-        //trainig loop
+        CUDA_CHECK(cudaEventRecord(start));//starting GPU timer
+        //training loop
         for(int epoch = 0; epoch<EPOCHS; epoch++){
-            // reset gradient buffered on GPU
-            cudaMemset(d_grad_w, 0, F * sizeof(float));
-            cudaMemset(d_grad_b, 0, sizeof(float));
+            //resetting gradients buffered on GPU
+            CUDA_CHECK(cudaMemset(d_grad_w, 0, F * sizeof(float)));
+            CUDA_CHECK(cudaMemset(d_grad_b, 0, sizeof(float)));
 
-            // Launch logistic regression kernel
+            // Launching logistic regression kernel
             logistic_regression_kernel<<<blocks, threads>>>(dX, dy, dw, db, d_grad_b, d_grad_w, N, F);
-            // Wait for kernel execution to finish
-            cudaDeviceSynchronize();
+            // Waiting for kernel execution to finish
+            CUDA_CHECK(cudaDeviceSynchronize());
 
-            vector<float> grad_w(F);//host buffer for weight gradients
-            float grad_b;//host buffer for bias gradient
+            vector<float> grad_w(F); //host buffer for weight gradients
+            float grad_b; //host buffer for bias gradient
             
             //retrieving gradients from GPU to host
-            cudaMemcpy(grad_w.data(), d_grad_w, F*sizeof(float), cudaMemcpyDeviceToHost);
-            cudaMemcpy(&grad_b, d_grad_b, sizeof(float), cudaMemcpyDeviceToHost);
+            CUDA_CHECK(cudaMemcpy(grad_w.data(), d_grad_w, F*sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(&grad_b, d_grad_b, sizeof(float), cudaMemcpyDeviceToHost));
 
-            // Update weights using gradient descent (once per epoch)
+            //updating weights using gradient descent (once per epoch)
             for(int j = 0; j < F; j++)
                 w[j] -= LR * (grad_w[j] / N);
 
-            b -= LR * (grad_b / N);//bias update
+            b -= LR * (grad_b / N); //bias update
 
-            // copy back to GPU update weights and bias
-            cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice);
-            cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice);
+            //copy back to GPU update weights and bias
+            CUDA_CHECK(cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
             
         }
 
-        // stop GPU timer
-        cudaEventRecord(stop);
-        cudaEventSynchronize(stop);
+        //stop GPU timer
+        CUDA_CHECK(cudaEventRecord(stop));
+        CUDA_CHECK(cudaEventSynchronize(stop));
         
         //compute elapsed time in milliseconds
-        cudaEventElapsedTime(&ms, start, stop);
+        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
 
         //retrieving final model parameters from GPU to Host
-        cudaMemcpy(w.data(), dw, F*sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(&b, db, sizeof(float), cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(w.data(), dw, F*sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(&b, db, sizeof(float), cudaMemcpyDeviceToHost));
 
-        //saving model performance
+        //saving model performances
         modelPerformance[t].time = ms;
         modelPerformance[t].numBlocks = blocks;
         modelPerformance[t].numThreads = threads;
@@ -233,19 +234,18 @@ int main(){
         int correct = 0;
         for(int i = 0; i < N; i++){
             float z = b;
-            // compute linear combination of features and weights
+            //computing linear combination of features and weights
             for(int j = 0; j < F; j++)
                 z += X[i*F + j] * modelPerformance[t].weights[j];
-
-            // apply sigmoid activation
+            //applying sigmoid activation
             float y_hat = 1.0f / (1.0f + exp(-z));
 
             int prediction = (y_hat >= 0.5f) ? 1 : 0;
-            // check if prediction matches ground truth
+            //checking if prediction matches ground truth
             if(prediction == (int)y[i])
                 correct++;
         }
-        //compute accuracy metric
+        //computing accuracy metrics
         float accuracy = (float)correct / N;
         modelPerformance[t].accuracy = accuracy;
         printf("\nAccuracy: %.2f%%\n", accuracy * 100.0f);
@@ -254,11 +254,11 @@ int main(){
     saveToCSV(modelPerformance, N_EXECUTION);
     
     //GPU memory cleanup
-    cudaFree(dX); 
-    cudaFree(dy); 
-    cudaFree(dw); 
-    cudaFree(db);
-    //destroy cuda timing events
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    CUDA_CHECK(cudaFree(dX)); 
+    CUDA_CHECK(cudaFree(dy)); 
+    CUDA_CHECK(cudaFree(dw)); 
+    CUDA_CHECK(cudaFree(db));
+    //destroying cuda timing events
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
 }
