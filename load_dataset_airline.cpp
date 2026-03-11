@@ -12,6 +12,15 @@ struct Header {
     uint32_t n_features;
 };
 
+// Function that return true if a certain column should be normalized, false otherwise
+bool shouldNormalize(uint32_t j) {
+    // Excluding: 0 Satisfaction, 1 Gender, 2 Customer Type, 4 Type Of Travel, 5,6,7 Classes
+    if (j == 0 || j == 1 || j == 2 || j >= 4 || j <= 7) {
+        return false;
+    }
+    return true;
+}
+
 int main() {
     ifstream file("Dataset_airline.csv");
     if (!file.is_open()) {
@@ -25,7 +34,7 @@ int main() {
     vector<float> X;
     vector<float> y;
 
-    uint32_t n_features = 22; // senza timestamp
+    uint32_t n_features = 22; // without timestamp
     uint32_t n_samples = 0;
 
     while (getline(file, line)) {
@@ -95,7 +104,7 @@ int main() {
     cout << "Feature: " << n_features << "\n";
 
     // ------------------------
-    // Calcolo mean
+    // Calcutaing mean
     // ------------------------
     vector<float> mean(n_features, 0.0f);
     vector<float> stddev(n_features, 0.0f);
@@ -111,7 +120,7 @@ int main() {
     }
 
     // ------------------------
-    // Calcolo std
+    // Calculating std
     // ------------------------
     for (uint32_t i = 0; i < n_samples; ++i) {
         for (uint32_t j = 0; j < n_features; ++j) {
@@ -127,17 +136,20 @@ int main() {
     }
 
     // ------------------------
-    // Normalizzazione
+    // Normalization
     // ------------------------
     for (uint32_t i = 0; i < n_samples; ++i) {
         for (uint32_t j = 0; j < n_features; ++j) {
-            X[i * n_features + j] =
-                (X[i * n_features + j] - mean[j]) / stddev[j];
+            // Normalizing only if it is NOT a categorical/binary variable
+            if (shouldNormalize(j)) {
+                X[i * n_features + j] = (X[i * n_features + j] - mean[j]) / stddev[j];
+            }
+            // Otherwise the value remains
         }
     }
 
     // ------------------------
-    // Scrittura file binario
+    // Writing binary file
     // ------------------------
     ofstream out("dataset_normalized.bin", ios::binary);
 
