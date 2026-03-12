@@ -10,7 +10,7 @@ using namespace std;
 #define EPOCHS 1000
 #define LR 0.05f
 #define N_EXECUTION 5
-#define BATCH_SIZE 2048
+#define BATCH_SIZE 256
 
 #define CUDA_CHECK(call) do {                              \
   cudaError_t _err = (call);                               \
@@ -31,31 +31,36 @@ struct Performance{
     vector<float> weights;
 };
 
-// Kernel per mini-batch sequenziale
-__global__ void logistic_regression_kernel_sequential(
+// --- Kernel: ogni blocco calcola un mini-batch ---
+__global__ void logistic_regression_parallel_batches(
     float* X,
     float* y,
     float* w,
     float* b,
-    float* grad_b,
-    float* grad_w,
-    int batch_start,
-    int batch_size,
-    int F
+    float* grad_w_global,
+    float* grad_b_global,
+    int N,
+    int F,
+    int batch_size
 ){
     extern __shared__ float shared[];
     float* s_grad_w = shared;
     float* s_grad_b = &shared[F];
 
     int tid = threadIdx.x;
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int batch_idx = blockIdx.x;                 // ogni blocco = 1 mini-batch
+    int batch_start = batch_idx * batch_size;
+    int local_threads = blockDim.x;
+    int batch_actual_size = min(batch_size, N - batch_start);
 
-    for(int j = tid; j < F; j += blockDim.x) s_grad_w[j] = 0.0f;
+    // inizializza shared memory
+    for(int j = tid; j < F; j += local_threads) s_grad_w[j] = 0.0f;
     if(tid == 0) *s_grad_b = 0.0f;
 
     __syncthreads();
 
-    if(i < batch_size){
+    // calcola gradiente per i campioni del mini-batch
+    for(int i = tid; i < batch_actual_size; i += local_threads){
         int idx = batch_start + i;
         float z = *b;
         for(int j = 0; j < F; j++)
@@ -71,12 +76,14 @@ __global__ void logistic_regression_kernel_sequential(
 
     __syncthreads();
 
-    for(int j = tid; j < F; j += blockDim.x)
-        atomicAdd(&grad_w[j], s_grad_w[j]);
+    // somma i gradienti sul globale
+    for(int j = tid; j < F; j += local_threads)
+        atomicAdd(&grad_w_global[j], s_grad_w[j]);
     if(tid == 0)
-        atomicAdd(grad_b, *s_grad_b);
+        atomicAdd(grad_b_global, *s_grad_b);
 }
 
+// --- Funzione per salvare CSV ---
 void saveToCSV(Performance p[], int n, int f) {
     ofstream file("modelPerformanceMinibatch.csv");
     file << "numThreads;numBlocks;time;accuracy";
@@ -100,6 +107,7 @@ int main(){
     float *dX, *dy, *dw, *db, *d_grad_w, *d_grad_b;
     int thread_configs[] = {64,128,256,512,1024};
 
+    // --- Load dataset ---
     ifstream dataset_bin("dataset_normalized.bin", ios::binary);
     if(!dataset_bin){ cerr << "Failed to open dataset_normalized.bin\n"; return 1; }
     dataset_bin.read((char*)&h, sizeof(h));
@@ -113,6 +121,7 @@ int main(){
     dataset_bin.read((char*)y.data(), N*sizeof(float));
     dataset_bin.close();
 
+    // --- GPU allocation ---
     CUDA_CHECK(cudaMalloc(&dX, N*F*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&dy, N*sizeof(float)));
     CUDA_CHECK(cudaMalloc(&dw, F*sizeof(float)));
@@ -137,33 +146,32 @@ int main(){
         CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
 
         int threads = thread_configs[t];
-        int blocks = (BATCH_SIZE + threads - 1) / threads;
-        
+        int num_batches = (N + BATCH_SIZE - 1) / BATCH_SIZE;
+
         CUDA_CHECK(cudaEventRecord(start));
 
         for(int epoch = 0; epoch < EPOCHS; epoch++){
-            for(int batch_start = 0; batch_start < N; batch_start += BATCH_SIZE){
-                int batch_size = min(BATCH_SIZE, N - batch_start);
+            CUDA_CHECK(cudaMemset(d_grad_w, 0, F*sizeof(float)));
+            CUDA_CHECK(cudaMemset(d_grad_b, 0, sizeof(float)));
 
-                CUDA_CHECK(cudaMemset(d_grad_w, 0, F*sizeof(float)));
-                CUDA_CHECK(cudaMemset(d_grad_b, 0, sizeof(float)));
+            // --- Launch kernel: ogni blocco calcola un mini-batch ---
+            logistic_regression_parallel_batches<<<num_batches, threads, sharedMemSize>>>(
+                dX, dy, dw, db, d_grad_w, d_grad_b, N, F, BATCH_SIZE
+            );
+            CUDA_CHECK(cudaDeviceSynchronize());
 
-                logistic_regression_kernel_sequential<<<blocks, threads, sharedMemSize>>>(
-                    dX, dy, dw, db, d_grad_b, d_grad_w, batch_start, batch_size, F
-                );
-                CUDA_CHECK(cudaDeviceSynchronize());
+            // copia gradienti su host
+            vector<float> grad_w(F);
+            float grad_b;
+            CUDA_CHECK(cudaMemcpy(grad_w.data(), d_grad_w, F*sizeof(float), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(&grad_b, d_grad_b, sizeof(float), cudaMemcpyDeviceToHost));
 
-                vector<float> grad_w(F);
-                float grad_b;
-                CUDA_CHECK(cudaMemcpy(grad_w.data(), d_grad_w, F*sizeof(float), cudaMemcpyDeviceToHost));
-                CUDA_CHECK(cudaMemcpy(&grad_b, d_grad_b, sizeof(float), cudaMemcpyDeviceToHost));
+            // aggiorna pesi sul host
+            for(int j = 0; j < F; j++) w[j] -= LR * (grad_w[j] / N);
+            b -= LR * (grad_b / N);
 
-                for(int j = 0; j < F; j++) w[j] -= LR * (grad_w[j] / batch_size);
-                b -= LR * (grad_b / batch_size);
-
-                CUDA_CHECK(cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice));
-                CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
-            }
+            CUDA_CHECK(cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
         }
 
         CUDA_CHECK(cudaEventRecord(stop));
@@ -172,14 +180,15 @@ int main(){
         CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
 
         modelPerformance[t].time = elapsed_ms;
-        modelPerformance[t].numBlocks = blocks;
+        modelPerformance[t].numBlocks = num_batches;
         modelPerformance[t].numThreads = threads;
         modelPerformance[t].weights = w;
         modelPerformance[t].bias = b;
 
-        printf("Threads: %d  Blocks: %d  Time: %.3f ms\n",threads, blocks, elapsed_ms);
+        printf("Threads: %d  Blocks: %d  Time: %.3f ms\n",threads, num_batches, elapsed_ms);
     }
 
+    // --- Evaluation ---
     for(int t = 0; t<N_EXECUTION; t++){
         int correct = 0;
         for(int i = 0; i < N; i++){
@@ -196,6 +205,7 @@ int main(){
 
     saveToCSV(modelPerformance, N_EXECUTION, F);
 
+    // --- Cleanup ---
     CUDA_CHECK(cudaFree(dX)); 
     CUDA_CHECK(cudaFree(dy));
     CUDA_CHECK(cudaFree(dw)); 
