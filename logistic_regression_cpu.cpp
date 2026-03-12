@@ -20,6 +20,19 @@ float sigmoid(float z){
     return 1.0f / (1.0f + exp(-z));
 }
 
+void saveToCSV(float time,float accuracy) {
+
+    ofstream file("modelPerformanceCpu.csv");
+
+    // header
+    file << "time;accuracy";
+    file << "\n";
+
+    // performances data
+    file << time << ";"
+            << accuracy;
+}
+
 int main(){
 
     Header h;
@@ -109,6 +122,8 @@ int main(){
     float accuracy = (float)correct / N;
 
     printf("\nAccuracy: %.2f%%\n", accuracy * 100.0f);
+
+    saveToCSV(time, accuracy);
 
     return 0;
 }
