@@ -31,6 +31,7 @@ struct Performance{
     int numBlocks;
     float time;
     float accuracy;
+    float bias;
     vector<float> weights;
 };
 
@@ -60,7 +61,7 @@ __global__ void logistic_regression_kernel_tiles(
 
     __syncthreads();
 
-    // calcolo del gradiente per ogni thread (sample) ---
+    
     if(i < N){
         float z = *b; //adding bias
         for(int j = 0; j < F; j++) //compute linear combination of features and weights
@@ -77,7 +78,7 @@ __global__ void logistic_regression_kernel_tiles(
 
     __syncthreads();
 
-    // --- un solo thread per blocco aggiorna memoria globale ---
+    // --- update global memory---
     for(int j = tid; j < F; j += blockDim.x)
         atomicAdd(&grad_w[j], s_grad_w[j]);
 
@@ -85,13 +86,13 @@ __global__ void logistic_regression_kernel_tiles(
         atomicAdd(grad_b, *s_grad_b);
 }
 
-void saveToCSV(Performance p[], int n) {
+void saveToCSV(Performance p[], int n, int f) {
 
     ofstream file("modelPerformanceShared.csv");
 
     // header
     file << "numThreads;numBlocks;time;accuracy";
-    for(int i = 0; i < 22; i++)
+    for(int i = 0; i < f; i++)
         file << ";weight" << i;
     file << "\n";
 
@@ -103,7 +104,7 @@ void saveToCSV(Performance p[], int n) {
              << p[i].time << ";"
              << p[i].accuracy;
 
-        for(int j = 0; j < 22; j++)
+        for(int j = 0; j < f; j++)
             file << ";" << p[i].weights[j];
 
         file << "\n";
@@ -153,10 +154,7 @@ int main(){
     // data transfer from Host to GPU
     CUDA_CHECK(cudaMemcpy(dX, X.data(), N*F*sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(dy, y.data(), N*sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
-
-    vector<float> w(F, 0.1f);
-    cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice);
+    
 
     
     size_t sharedMemSize = F*sizeof(float) + sizeof(float); // grad_w + grad_b
@@ -171,6 +169,10 @@ int main(){
 
     // testing multiple kernel configuration (threads / block)
     for(int t = 0 ; t<N_EXECUTION; t++){
+        b=0.0f;
+        vector<float> w(F, 0.1f);
+        CUDA_CHECK(cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
         int threads = thread_configs[t]; //number of threads per block
         int blocks = (N + threads - 1) / threads; //compute number of blocks needed
         
@@ -218,6 +220,7 @@ int main(){
         modelPerformance[t].numBlocks = blocks;
         modelPerformance[t].numThreads = threads;
         modelPerformance[t].weights = w;
+        modelPerformance[t].bias = b;
         printf("Threads: %d  Blocks: %d  Time: %.3f ms\n",threads, blocks, elapsed_ms);
     }
     
@@ -225,7 +228,7 @@ int main(){
     for(int t = 0; t<N_EXECUTION; t++){
         int correct = 0;
         for(int i = 0; i < N; i++){
-            float z = b;
+            float z = modelPerformance[t].bias;
             //computing linear combination of features and weights
             for(int j = 0; j < F; j++)
                 z += X[i*F + j] * modelPerformance[t].weights[j];
@@ -243,7 +246,7 @@ int main(){
         printf("\nAccuracy: %.2f%%\n", accuracy * 100.0f);
     }
     //saving performances on CSV file
-    saveToCSV(modelPerformance, N_EXECUTION);
+    saveToCSV(modelPerformance, N_EXECUTION, F);
     //GPU memory cleanup
     CUDA_CHECK(cudaFree(dX)); 
     CUDA_CHECK(cudaFree(dy));

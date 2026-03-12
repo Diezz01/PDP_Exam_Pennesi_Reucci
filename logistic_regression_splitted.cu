@@ -30,6 +30,7 @@ struct Performance{
     int numBlocks;
     float time;
     float accuracy;
+    float bias;
     vector<float> weights;
 };
 
@@ -103,13 +104,13 @@ __global__ void gradient_kernel(
 }
 
 //function used to save perfromances in a csv file 
-void saveToCSV(Performance p[], int n) {
+void saveToCSV(Performance p[], int n, int f) {
 
     ofstream file("modelPerformanceSplitted.csv");
 
     // header
     file << "numThreads;numBlocks;time;accuracy";
-    for(int i = 0; i < 22; i++)
+    for(int i = 0; i < f; i++)
         file << ";weight" << i;
     file << "\n";
 
@@ -121,7 +122,7 @@ void saveToCSV(Performance p[], int n) {
              << p[i].time << ";"
              << p[i].accuracy;
 
-        for(int j = 0; j < 22; j++)
+        for(int j = 0; j < f; j++)
             file << ";" << p[i].weights[j];
 
         file << "\n";
@@ -173,7 +174,7 @@ int main(){
     vector<float> stddev(F);
     vector<float> X(N * F); //matrix of features (N x F)
     vector<float> y(N); //true labl vector (0 or 1)
-    vector<float> w(F, 0.1f);//initialization of weights array
+   
 
     //fetching data from binary file to populate structures
     dataset_bin.read((char*)mean.data(), F * sizeof(float));
@@ -188,7 +189,6 @@ int main(){
     CUDA_CHECK(cudaMalloc(&dy, y_size * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&dw, F * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&db, sizeof(float)));
-
     CUDA_CHECK(cudaMalloc(&d_grad_w, F * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_grad_b, sizeof(float)));
 
@@ -196,10 +196,9 @@ int main(){
     CUDA_CHECK(cudaMalloc(&derror, N * sizeof(float)));
 
     // data transfer from Host to GPU
-    CUDA_CHECK(cudaMemcpy(dw, w.data(), F * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(dX, X.data(), X_size * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(dy, y.data(), y_size * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
+    
 
     // counting how many samples belong to each class
     int count0 = 0, count1 = 0;
@@ -217,6 +216,10 @@ int main(){
     cout << "Training started...\n";
     // testing multiple kernel configuration (threads / block)
     for(int t = 0 ; t<N_EXECUTION; t++){
+        b=0.0f;
+        vector<float> w(F, 0.1f);
+        CUDA_CHECK(cudaMemcpy(dw, w.data(), F*sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
 
         int threads = thread_configs[t];//number of threads per block
         int blocks = (N + threads - 1) / threads; //compute number of blocks needed
@@ -273,6 +276,7 @@ int main(){
         modelPerformance[t].numBlocks = blocks;
         modelPerformance[t].numThreads = threads;
         modelPerformance[t].weights = w;
+        modelPerformance[t].bias = b;
 
         printf("Threads: %d  Blocks: %d  Time: %.3f ms\n",threads, blocks, ms);
     }
@@ -284,7 +288,7 @@ int main(){
 
         for(int i = 0; i < N; i++){
 
-            float z = b;
+            float z = modelPerformance[t].bias;
             //computing linear combination of features and weights
             for(int j = 0; j < F; j++)
                 z += X[i*F + j] * modelPerformance[t].weights[j];
@@ -303,7 +307,7 @@ int main(){
         printf("\nAccuracy: %.2f%%\n", accuracy * 100.0f);
     }
     //saving performances on CSV file
-    saveToCSV(modelPerformance, N_EXECUTION);
+    saveToCSV(modelPerformance, N_EXECUTION, F);
     //GPU memory cleanup
     CUDA_CHECK(cudaFree(dX));
     CUDA_CHECK(cudaFree(dy));
