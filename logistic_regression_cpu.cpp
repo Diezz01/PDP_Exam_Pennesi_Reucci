@@ -6,7 +6,7 @@
 
 using namespace std;
 
-#define EPOCHS 500 //number of training epochs
+#define EPOCHS 1000 //number of training epochs
 #define LR 0.05f //learning rate
 
 //binary file structure
