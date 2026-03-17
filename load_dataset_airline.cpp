@@ -13,19 +13,7 @@ struct Header {
     uint32_t n_features;
 };
 
-// Decide se una colonna deve essere normalizzata
-/*bool shouldNormalize(uint32_t j) {
-    // 0 Satisfaction (target ma non sta in X)
-    // 1 Gender
-    // 2 Customer Type
-    // 4 Type Of Travel
-    // 5,6,7 Class one-hot
-    if (j == 0 || j == 1 || j == 3 || (j >= 4 && j <= 6)) {
-        return false;
-    }
-    return true;
-}*/
-
+// Function that decides if a column should be normalized or not
 bool shouldNormalize(uint32_t j){
     if (j == 2 || j == 7 || j == 22 || j == 23)
         return true;
@@ -112,7 +100,7 @@ int main() {
             X.push_back(0.0f);
         }
 
-        // altre 17 feature
+        // Remaining features
         for (uint32_t i = 0; i < 17; i++) {
 
             getline(ss, token, ';');
@@ -126,7 +114,7 @@ int main() {
         n_samples++;
     }
 
-    n_features += 2; // per one-hot
+    n_features += 2; // one-hot encode
 
     file.close();
     cout << "X size: " << X.size() << endl;
@@ -136,7 +124,7 @@ int main() {
     cout << "Feature: " << n_features << endl;
 
     // ------------------------
-    // Calcolo mean
+    // Computing mean
     // ------------------------
 
     vector<float> mean(n_features, 0.0f);
@@ -157,7 +145,7 @@ int main() {
     }
 
     // ------------------------
-    // Calcolo std
+    // Computing std
     // ------------------------
 
     for (uint32_t i = 0; i < n_samples; i++) {
@@ -178,7 +166,7 @@ int main() {
     }
 
     // ------------------------
-    // Normalizzazione
+    // Normalization
     // ------------------------
 
     for (uint32_t i = 0; i < n_samples; i++) {
@@ -194,7 +182,7 @@ int main() {
     }
 
     // ------------------------
-    // Scrittura CSV normalizzato
+    // Writing of normalized CSV
     // ------------------------
 
     ofstream csv_out("dataset_normalized.csv");
@@ -232,7 +220,7 @@ int main() {
     cout << "File dataset_normalized.csv scritto correttamente\n";
 
     // ------------------------
-    // Scrittura BINARIO
+    // Writing BINARY file
     // ------------------------
 
     ofstream out("dataset_normalized.bin", ios::binary);
