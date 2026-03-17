@@ -157,7 +157,7 @@ int main(){
         CUDA_CHECK(cudaMemcpy(db, &b, sizeof(float), cudaMemcpyHostToDevice));
 
         int threads = thread_configs[t]; //number of threads per block
-        int num_batches = (N + BATCH_SIZE - 1) / BATCH_SIZE; //computing number of batch
+        int num_block = (N + BATCH_SIZE - 1) / BATCH_SIZE; //computing number of batch
 
         CUDA_CHECK(cudaEventRecord(start)); //starting GPU timer
         //training loop
@@ -167,7 +167,7 @@ int main(){
             CUDA_CHECK(cudaMemset(d_grad_b, 0, sizeof(float)));
 
             // Launching kernel: each block computes one mini-batch
-            logistic_regression_parallel_batches<<<num_batches, threads, sharedMemSize>>>(
+            logistic_regression_parallel_batches<<<num_block, threads, sharedMemSize>>>(
                 dX, dy, dw, db, d_grad_w, d_grad_b, N, F, BATCH_SIZE
             );
             CUDA_CHECK(cudaDeviceSynchronize());
@@ -195,12 +195,12 @@ int main(){
 
         //saving model performances
         modelPerformance[t].time = elapsed_ms;
-        modelPerformance[t].numBlocks = num_batches;
+        modelPerformance[t].numBlocks = num_block;
         modelPerformance[t].numThreads = threads;
         modelPerformance[t].weights = w;
         modelPerformance[t].bias = b;
 
-        printf("Threads: %d  Blocks: %d  Time: %.3f ms\n",threads, num_batches, elapsed_ms);
+        printf("Threads: %d  Blocks: %d  Time: %.3f ms\n",threads, num_block, elapsed_ms);
     }
 
     // Evaluation of each trained model
